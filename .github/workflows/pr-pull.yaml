@@ -1,12 +1,14 @@
 name: Pull Request
-run-name: ${{ github.event.pull_request.title }} pull request run 🚀
+run-name: ${{ github.event.pull_request.title || github.ref_name }} pull request run 🚀
 on:
   workflow_dispatch:
-  pull_request:
-    paths-ignore:
-      - '**.md'
-    branches: [master, main]
-    types: [ opened, synchronize, reopened ]
+  # Automatic pull request builds are disabled; run this workflow by hand from
+  # the Actions tab instead.
+  # pull_request:
+  #   paths-ignore:
+  #     - '**.md'
+  #   branches: [master, main]
+  #   types: [ opened, synchronize, reopened ]
 permissions:
   contents: read
 concurrency:

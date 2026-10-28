@@ -1,11 +1,14 @@
 name: Push
 run-name: ${{ github.ref_name }} push run 🚀
 on:
-  push:
-    branches:
-      - master
-      - main
-      - 'release/**'
+  # Automatic push/tag runs are disabled; run this workflow by hand from the
+  # Actions tab (or use the "Dispatch" workflow) instead.
+  # push:
+  #   branches:
+  #     - master
+  #     - main
+  #     - 'release/**'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
