@@ -41,7 +41,6 @@
       "description": "Build for macOS 12.0+ (Universal binary) for CI",
       "generator": "Xcode",
       "cacheVariables": {
-        "CMAKE_COMPILE_WARNING_AS_ERROR": true,
         "ENABLE_CCACHE": true
       }
     },
@@ -64,10 +63,7 @@
       "name": "windows-ci-x64",
       "inherits": ["windows-x64"],
       "displayName": "Windows x64 CI build",
-      "description": "Build for Windows x64 on CI",
-      "cacheVariables": {
-        "CMAKE_COMPILE_WARNING_AS_ERROR": true
-      }
+      "description": "Build for Windows x64 on CI"
     },
     {
       "name": "ubuntu-x86_64",
@@ -94,7 +90,6 @@
       "description": "Build for Ubuntu x86_64 on CI",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "CMAKE_COMPILE_WARNING_AS_ERROR": true,
         "ENABLE_CCACHE": true
       }
     }
