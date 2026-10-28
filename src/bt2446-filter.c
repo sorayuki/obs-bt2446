@@ -25,6 +25,7 @@ struct bt2446_filter {
 	gs_eparam_t *c_hdr_reference_white;
 	gs_eparam_t *c_white_shift;
 	gs_eparam_t *input_scale;
+	gs_eparam_t *output_scale;
 	int selected_method;
 	float hdr_peak_nits;
 	float sdr_peak_nits;
@@ -104,6 +105,7 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 	filter->c_hdr_reference_white = gs_effect_get_param_by_name(filter->effect, "c_hdr_reference_white_nits");
 	filter->c_white_shift = gs_effect_get_param_by_name(filter->effect, "c_white_shift");
 	filter->input_scale = gs_effect_get_param_by_name(filter->effect, "input_scale");
+	filter->output_scale = gs_effect_get_param_by_name(filter->effect, "output_scale");
 
 	obs_source_update(context, settings);
 	return filter;
@@ -177,31 +179,48 @@ static bool hlg_shaping_changed(obs_properties_t *props, obs_property_t *propert
 static obs_properties_t *bt2446_filter_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
-	obs_property_t *method = obs_properties_add_list(props, "method", obs_module_text("BT2446.Method"),
-							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(method, obs_module_text("BT2446.MethodA"), METHOD_A);
-	obs_property_list_add_int(method, obs_module_text("BT2446.MethodB"), METHOD_B);
-	obs_property_list_add_int(method, obs_module_text("BT2446.MethodC"), METHOD_C);
-	obs_property_set_modified_callback(method, method_changed);
+	obs_property_t *p;
 
-	obs_properties_add_int(props, "hdr_peak_nits", obs_module_text("BT2446.HdrPeak"), 100, 10000, 10);
-	obs_properties_add_int(props, "sdr_peak_nits", obs_module_text("BT2446.SdrPeak"), 40, 300, 1);
-	obs_properties_add_int(props, "b_knee_nits", obs_module_text("BT2446.BKnee"), 1, 500, 1);
-	obs_properties_add_int(props, "b_strength_nits", obs_module_text("BT2446.BStrength"), 1, 200, 1);
-	obs_properties_add_float_slider(props, "b_slope", obs_module_text("BT2446.BSlope"), 0.5, 2.0, 0.01);
-	obs_property_t *hlg_shaping =
-		obs_properties_add_bool(props, "b_hlg_shaping", obs_module_text("BT2446.BHlgShaping"));
-	obs_property_set_modified_callback(hlg_shaping, hlg_shaping_changed);
-	obs_properties_add_int(props, "b_input_lw_nits", obs_module_text("BT2446.BInputLw"), 100, 10000, 10);
-	obs_properties_add_float_slider(props, "c_alpha", obs_module_text("BT2446.CAlpha"), 0.0, 0.33, 0.01);
-	obs_properties_add_float_slider(props, "c_k1", obs_module_text("BT2446.CK1"), 0.1, 1.5, 0.0001);
-	obs_properties_add_float(props, "c_knee_sdr_nits", obs_module_text("BT2446.CKnee"), 20.0, 90.0, 0.1);
-	obs_properties_add_int(props, "c_hdr_reference_white_nits", obs_module_text("BT2446.CHdrReferenceWhite"), 50,
-			       500, 1);
-	obs_properties_add_int(props, "c_sdr_reference_white_nits", obs_module_text("BT2446.CSdrReferenceWhite"), 20,
-			       100, 1);
-	obs_properties_add_float_slider(props, "c_white_shift", obs_module_text("BT2446.CWhiteShift"), 0.0, 1.0,
-					0.01);
+	p = obs_properties_add_list(props, "method", obs_module_text("BT2446.Method"), OBS_COMBO_TYPE_LIST,
+				    OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(p, obs_module_text("BT2446.MethodA"), METHOD_A);
+	obs_property_list_add_int(p, obs_module_text("BT2446.MethodB"), METHOD_B);
+	obs_property_list_add_int(p, obs_module_text("BT2446.MethodC"), METHOD_C);
+	obs_property_set_long_description(p, obs_module_text("BT2446.Method.Desc"));
+	obs_property_set_modified_callback(p, method_changed);
+
+	p = obs_properties_add_int(props, "hdr_peak_nits", obs_module_text("BT2446.HdrPeak"), 100, 10000, 10);
+	obs_property_set_long_description(p, obs_module_text("BT2446.HdrPeak.Desc"));
+	p = obs_properties_add_int(props, "sdr_peak_nits", obs_module_text("BT2446.SdrPeak"), 40, 300, 1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.SdrPeak.Desc"));
+
+	p = obs_properties_add_int(props, "b_knee_nits", obs_module_text("BT2446.BKnee"), 1, 500, 1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.BKnee.Desc"));
+	p = obs_properties_add_int(props, "b_strength_nits", obs_module_text("BT2446.BStrength"), 1, 200, 1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.BStrength.Desc"));
+	p = obs_properties_add_float_slider(props, "b_slope", obs_module_text("BT2446.BSlope"), 0.5, 2.0, 0.01);
+	obs_property_set_long_description(p, obs_module_text("BT2446.BSlope.Desc"));
+	p = obs_properties_add_bool(props, "b_hlg_shaping", obs_module_text("BT2446.BHlgShaping"));
+	obs_property_set_long_description(p, obs_module_text("BT2446.BHlgShaping.Desc"));
+	obs_property_set_modified_callback(p, hlg_shaping_changed);
+	p = obs_properties_add_int(props, "b_input_lw_nits", obs_module_text("BT2446.BInputLw"), 100, 10000, 10);
+	obs_property_set_long_description(p, obs_module_text("BT2446.BInputLw.Desc"));
+
+	p = obs_properties_add_float_slider(props, "c_alpha", obs_module_text("BT2446.CAlpha"), 0.0, 0.33, 0.01);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CAlpha.Desc"));
+	p = obs_properties_add_float_slider(props, "c_k1", obs_module_text("BT2446.CK1"), 0.1, 1.5, 0.0001);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CK1.Desc"));
+	p = obs_properties_add_float(props, "c_knee_sdr_nits", obs_module_text("BT2446.CKnee"), 20.0, 90.0, 0.1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CKnee.Desc"));
+	p = obs_properties_add_int(props, "c_hdr_reference_white_nits", obs_module_text("BT2446.CHdrReferenceWhite"),
+				   50, 500, 1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CHdrReferenceWhite.Desc"));
+	p = obs_properties_add_int(props, "c_sdr_reference_white_nits", obs_module_text("BT2446.CSdrReferenceWhite"),
+				   20, 100, 1);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CSdrReferenceWhite.Desc"));
+	p = obs_properties_add_float_slider(props, "c_white_shift", obs_module_text("BT2446.CWhiteShift"), 0.0,
+					    1.0, 0.01);
+	obs_property_set_long_description(p, obs_module_text("BT2446.CWhiteShift.Desc"));
 
 	obs_data_t *settings = obs_source_get_settings(((struct bt2446_filter *)data)->context);
 	method_changed(props, NULL, settings);
@@ -227,11 +246,37 @@ static void bt2446_filter_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "c_white_shift", 0.0);
 }
 
+/* Nits represented by 1.0 in the space of the render target the filter draws
+ * into. The output is normalised with this value so that the pixels handed to
+ * the compositor follow the convention of the target space instead of always
+ * being scRGB-normalised. */
+static float target_white_nits(enum gs_color_space space)
+{
+	switch (space) {
+	case GS_CS_709_SCRGB:
+		return 80.0f;
+	case GS_CS_709_EXTENDED:
+		return obs_get_video_sdr_white_level();
+	case GS_CS_SRGB:
+	case GS_CS_SRGB_16F:
+	default:
+		/* SDR reference white (BT.1886) */
+		return 100.0f;
+	}
+}
+
 static void bt2446_filter_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
 	struct bt2446_filter *filter = data;
-	const enum gs_color_space preferred_spaces[] = {GS_CS_SRGB, GS_CS_SRGB_16F, GS_CS_709_EXTENDED};
+	/* Space of the render target the result will end up in. Must be sampled
+	 * before the filter's own texrender becomes current. */
+	const enum gs_color_space output_space = gs_get_color_space();
+	/* GS_CS_709_SCRGB first: Windows Graphics Capture and game capture hand
+	 * out native scRGB (1.0 = 80 cd/m2) when it is offered, which removes the
+	 * ambiguity between scRGB and OBS' SDR-white-relative extended range. */
+	const enum gs_color_space preferred_spaces[] = {GS_CS_709_SCRGB, GS_CS_709_EXTENDED, GS_CS_SRGB_16F,
+							GS_CS_SRGB};
 	const enum gs_color_space source_space = obs_source_get_color_space(
 		obs_filter_get_target(filter->context), OBS_COUNTOF(preferred_spaces), preferred_spaces);
 	if (source_space != GS_CS_709_EXTENDED && source_space != GS_CS_709_SCRGB) {
@@ -260,7 +305,11 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 	gs_effect_set_float(filter->c_knee, filter->c_knee_hdr_nits);
 	gs_effect_set_float(filter->c_hdr_reference_white, filter->c_hdr_reference_white_nits);
 	gs_effect_set_float(filter->c_white_shift, filter->c_white_shift_value);
-	gs_effect_set_float(filter->input_scale, source_space == GS_CS_709_SCRGB ? 80.0f : obs_get_video_sdr_white_level());
+	gs_effect_set_float(filter->input_scale,
+			    source_space == GS_CS_709_SCRGB ? 80.0f : obs_get_video_sdr_white_level());
+	/* The result is written as if it were a regular SDR source in the space of
+	 * the current render target, so the compositor has nothing left to map. */
+	gs_effect_set_float(filter->output_scale, 1.0f / fmaxf(target_white_nits(output_space), 0.0001f));
 
 	gs_blend_state_push();
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
@@ -271,10 +320,28 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 static enum gs_color_space bt2446_filter_get_color_space(void *data, size_t count,
 							 const enum gs_color_space *preferred_spaces)
 {
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(count);
-	UNUSED_PARAMETER(preferred_spaces);
-	return GS_CS_SRGB_16F;
+	struct bt2446_filter *filter = data;
+	const enum gs_color_space source_space =
+		obs_source_get_color_space(obs_filter_get_target(filter->context), 0, NULL);
+
+	/* Only HDR inputs are converted; everything else is passed through
+	 * untouched, so keep reporting the source's own space in that case. */
+	if (source_space != GS_CS_709_EXTENDED && source_space != GS_CS_709_SCRGB)
+		return source_space;
+
+	/* The filter emits SDR, therefore the caller must composite it as an SDR
+	 * source. Honour the requested spaces so libobs does not have to convert
+	 * the result again. */
+	for (size_t i = 0; i < count; ++i) {
+		if (preferred_spaces[i] == GS_CS_SRGB)
+			return GS_CS_SRGB;
+	}
+	for (size_t i = 0; i < count; ++i) {
+		if (preferred_spaces[i] == GS_CS_SRGB_16F)
+			return GS_CS_SRGB_16F;
+	}
+
+	return GS_CS_SRGB;
 }
 
 struct obs_source_info bt2446_filter = {

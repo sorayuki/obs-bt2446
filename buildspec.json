@@ -38,7 +38,7 @@
     },
     "name": "obs-bt2446-tonemap",
     "displayName": "BT.2446 HDR to SDR Tone Mapper",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "author": "OBS BT.2446",
     "website": "https://www.itu.int/rec/R-REP-BT.2446",
     "email": ""

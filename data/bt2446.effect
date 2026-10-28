@@ -1,6 +1,7 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float input_scale;
+uniform float output_scale;
 uniform float method;
 uniform float hdr_peak_nits;
 uniform float sdr_peak_nits;
@@ -327,8 +328,10 @@ float4 PSDefault(FragData f_in) : TARGET
 	} else {
 		result2020 = map_method_c(normalized2020) * sdr_peak_nits;
 	}
-	float3 result_scRGB_nits = rec2020_to_rec709(result2020);
-	return float4(result_scRGB_nits / 80.0, rgba.a);
+	// Write the result in the convention of the target space (1.0 = the target's
+	// white level) so the compositor can treat the source as plain SDR.
+	float3 result_target = rec2020_to_rec709(result2020) * output_scale;
+	return float4(result_target, rgba.a);
 }
 
 technique Draw
