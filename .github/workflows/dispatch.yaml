@@ -1,5 +1,5 @@
 name: Dispatch
-run-name: Dispatched Repository Actions - ${{ inputs.job }} ⌛️
+run-name: Dispatched Repository Actions - ${{ inputs.job }}${{ inputs.tag && format(' ({0})', inputs.tag) || '' }} ⌛️
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +9,11 @@ on:
         type: choice
         options:
           - build
+          - release
+      tag:
+        description: Existing tag to build from, e.g. 1.2.3 (required for "release", unused for "build")
+        required: false
+        type: string
 permissions:
   contents: write
 jobs:
@@ -16,3 +21,73 @@ jobs:
     if: inputs.job == 'build'
     uses: ./.github/workflows/build-project.yaml
     secrets: inherit
+    permissions:
+      contents: write
+
+  check-tag:
+    name: Check Tag Input ☑️
+    if: inputs.job == 'release'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verify Tag Was Provided ☑️
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          : Verify Tag Was Provided ☑️
+          shopt -s extglob
+
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "::error::The 'release' job needs the 'tag' input set to an existing tag to build from."
+            exit 1
+          fi
+
+          case "${RELEASE_TAG}" in
+            +([0-9]).+([0-9]).+([0-9]) | +([0-9]).+([0-9]).+([0-9])-@(beta|rc)*([0-9]) ) ;;
+            *)
+              echo "::error::'${RELEASE_TAG}' is not a valid release tag (expected X.Y.Z or X.Y.Z-{rc,beta}N)."
+              exit 1
+              ;;
+          esac
+
+      - name: Verify Tag Exists ☑️
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          : Verify Tag Exists ☑️
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > /dev/null; then
+            echo "::error::Tag '${RELEASE_TAG}' does not exist in the repository."
+            exit 1
+          fi
+
+  build-release:
+    name: Build Release 🧱
+    if: inputs.job == 'release'
+    needs: check-tag
+    uses: ./.github/workflows/build-project.yaml
+    with:
+      gitRef: refs/tags/${{ inputs.tag }}
+      codesign: 'true'
+      notarize: 'true'
+      package: 'true'
+      config: 'Release'
+    secrets: inherit
+    permissions:
+      contents: write
+
+  create-release:
+    name: Create Release 🛫
+    if: inputs.job == 'release'
+    needs: [check-tag, build-release]
+    uses: ./.github/workflows/create-release.yaml
+    with:
+      version: ${{ inputs.tag }}
+      pluginName: ${{ needs.build-release.outputs.pluginName }}
+      commitHash: ${{ needs.build-release.outputs.commitHash }}
+      commitSha: ${{ needs.build-release.outputs.commitSha }}
+    secrets: inherit
+    permissions:
+      contents: write

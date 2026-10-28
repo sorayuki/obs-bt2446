@@ -1,0 +1,117 @@
+name: Create Release Draft 🛫
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release tag name to create a draft release for
+        required: true
+        type: string
+      pluginName:
+        description: Project name detected by parsing build spec file
+        required: true
+        type: string
+      commitHash:
+        description: First nine characters of the commit hash build artifacts are named after
+        required: true
+        type: string
+      commitSha:
+        description: Full commit hash the draft release should point at
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  create-release:
+    name: Create Release Draft 🛫
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check Release Tag ☑️
+        id: check
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          : Check Release Tag ☑️
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+          shopt -s extglob
+
+          case "${RELEASE_TAG}" in
+            +([0-9]).+([0-9]).+([0-9]) )
+              echo 'validTag=true' >> $GITHUB_OUTPUT
+              echo 'prerelease=false' >> $GITHUB_OUTPUT
+              ;;
+            +([0-9]).+([0-9]).+([0-9])-@(beta|rc)*([0-9]) )
+              echo 'validTag=true' >> $GITHUB_OUTPUT
+              echo 'prerelease=true' >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::'${RELEASE_TAG}' is not a valid release tag (expected X.Y.Z or X.Y.Z-{rc,beta}N)."
+              exit 1
+              ;;
+          esac
+
+      - name: Download Build Artifacts 📥
+        uses: actions/download-artifact@v4
+        id: download
+
+      - name: Rename Files 🏷️
+        env:
+          COMMIT_HASH: ${{ inputs.commitHash }}
+        run: |
+          : Rename Files 🏷️
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+          shopt -s extglob
+          shopt -s nullglob
+
+          root_dir="$(pwd)"
+          commit_hash="${COMMIT_HASH}"
+
+          variants=(
+            'windows-x64;zip|exe'
+            'macos-universal;tar.xz|pkg'
+            # The Ubuntu and source variants match nothing while the Ubuntu job
+            # in build-project.yaml stays commented out.
+            'ubuntu-24.04-x86_64;tar.xz|deb|ddeb'
+            'sources;tar.xz'
+          )
+
+          for variant_data in "${variants[@]}"; do
+            IFS=';' read -r variant suffix <<< "${variant_data}"
+
+            candidates=(*-${variant}-${commit_hash}/@(*|*-dbgsym).@(${suffix}))
+
+            for candidate in "${candidates[@]}"; do
+              mv "${candidate}" "${root_dir}"
+            done
+          done
+
+      - name: Generate Checksums 🪪
+        run: |
+          : Generate Checksums 🪪
+          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+          shopt -s extglob
+
+          echo "### Checksums" > ${{ github.workspace }}/CHECKSUMS.txt
+          for file in ${{ github.workspace }}/@(*.exe|*.deb|*.ddeb|*.pkg|*.tar.xz|*.zip); do
+            echo "    ${file##*/}: $(sha256sum "${file}" | cut -d " " -f 1)" >> ${{ github.workspace }}/CHECKSUMS.txt
+          done
+
+      - name: Create Release Draft 🛫
+        id: create_release
+        uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
+        with:
+          draft: true
+          prerelease: ${{ steps.check.outputs.prerelease }}
+          tag_name: ${{ inputs.version }}
+          target_commitish: ${{ inputs.commitSha }}
+          name: ${{ inputs.pluginName }} ${{ inputs.version }}
+          body_path: ${{ github.workspace }}/CHECKSUMS.txt
+          files: |
+            ${{ github.workspace }}/*.exe
+            ${{ github.workspace }}/*.zip
+            ${{ github.workspace }}/*.pkg
+            ${{ github.workspace }}/*.deb
+            ${{ github.workspace }}/*.ddeb
+            ${{ github.workspace }}/*.tar.xz

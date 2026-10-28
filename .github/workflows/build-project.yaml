@@ -1,10 +1,42 @@
 name: Build Project
 on:
   workflow_call:
+    inputs:
+      gitRef:
+        description: 'Branch or tag to check out and build (empty: ref of the calling event)'
+        required: false
+        type: string
+        default: ''
+      codesign:
+        description: 'Override code signing detected from the event (empty: keep event default)'
+        required: false
+        type: string
+        default: ''
+      notarize:
+        description: 'Override notarization detected from the event (empty: keep event default)'
+        required: false
+        type: string
+        default: ''
+      package:
+        description: 'Override packaging detected from the event (empty: keep event default)'
+        required: false
+        type: string
+        default: ''
+      config:
+        description: 'Override build config detected from the event (empty: keep event default)'
+        required: false
+        type: string
+        default: ''
     outputs:
       pluginName:
         description: Project name detected by parsing build spec file
         value: ${{ jobs.check-event.outputs.pluginName }}
+      commitHash:
+        description: First nine characters of the commit hash artifacts were built from
+        value: ${{ jobs.check-event.outputs.commitHash }}
+      commitSha:
+        description: Full commit hash artifacts were built from
+        value: ${{ jobs.check-event.outputs.commitSha }}
 jobs:
   check-event:
     name: Check GitHub Event Data 🔎
@@ -18,15 +50,21 @@ jobs:
       notarize: ${{ steps.setup.outputs.notarize }}
       config: ${{ steps.setup.outputs.config }}
       commitHash: ${{ steps.setup.outputs.commitHash }}
+      commitSha: ${{ steps.setup.outputs.commitSha }}
       pluginName: ${{ steps.setup.outputs.pluginName }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.gitRef || github.sha }}
           fetch-depth: 0
       - name: Check Event Data ☑️
         id: setup
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_CODESIGN: ${{ inputs.codesign }}
+          INPUT_NOTARIZE: ${{ inputs.notarize }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_CONFIG: ${{ inputs.config }}
         run: |
           : Check Event Data ☑️
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
@@ -56,11 +94,19 @@ jobs:
             *) ;;
           esac
 
+          if [[ "${INPUT_CODESIGN}" ]]; then config_data[0]="codesign:${INPUT_CODESIGN}"; fi
+          if [[ "${INPUT_NOTARIZE}" ]]; then config_data[1]="notarize:${INPUT_NOTARIZE}"; fi
+          if [[ "${INPUT_PACKAGE}" ]]; then config_data[2]="package:${INPUT_PACKAGE}"; fi
+          if [[ "${INPUT_CONFIG}" ]]; then config_data[3]="config:${INPUT_CONFIG}"; fi
+
           for config in "${config_data[@]}"; do
             IFS=':' read -r key value <<< "${config}"
             echo "${key}=${value}" >> $GITHUB_OUTPUT
           done
-          echo "commitHash=${GITHUB_SHA:0:9}" >> $GITHUB_OUTPUT
+
+          commit_sha="$(git rev-parse HEAD)"
+          echo "commitHash=${commit_sha:0:9}" >> $GITHUB_OUTPUT
+          echo "commitSha=${commit_sha}" >> $GITHUB_OUTPUT
 
           plugin_name="$(grep 'name' buildspec.json | sed -E -e 's/^.+"name":[^"]+"(.+)",?$/\1/g')"
           plugin_display_name="$(grep 'displayName' buildspec.json | sed -E -e 's/^.+"displayName":[^"]+"(.+)",?$/\1/g' || echo "")"
@@ -81,6 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.gitRef || github.sha }}
           submodules: recursive
           fetch-depth: 0
 
@@ -175,79 +222,81 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ${{ runner.os }}-ccache-${{ needs.check-event.outputs.config }}
 
-  ubuntu-build:
-    name: Build for Ubuntu 🐧
-    strategy:
-      matrix:
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    needs: check-event
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Set Up Environment 🔧
-        id: setup
-        run: |
-          : Set Up Environment 🔧
-          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
-
-          read -r product_name product_version <<< \
-            "$(jq -r '. | {name, version} | join(" ")' buildspec.json)"
-
-          echo "pluginName=${product_name}" >> $GITHUB_OUTPUT
-          echo "pluginVersion=${product_version}" >> $GITHUB_OUTPUT
-
-      - uses: actions/cache/restore@v4
-        id: ccache-cache
-        with:
-          path: ${{ github.workspace }}/.ccache
-          key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-
-
-      - name: Build Plugin 🧱
-        uses: ./.github/actions/build-plugin
-        with:
-          target: x86_64
-          config: ${{ needs.check-event.outputs.config }}
-
-      - name: Package Plugin 📀
-        uses: ./.github/actions/package-plugin
-        with:
-          target: x86_64
-          config: ${{ needs.check-event.outputs.config }}
-          package: ${{ fromJSON(needs.check-event.outputs.package) }}
-
-      - name: Upload Source Tarball 🗜️
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-sources-${{ needs.check-event.outputs.commitHash }}
-          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-source.*
-
-      - name: Upload Artifacts 📡
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}
-          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*.*
-
-      - name: Upload debug symbol artifacts 🪲
-        uses: actions/upload-artifact@v4
-        if: ${{ fromJSON(needs.check-event.outputs.package) }}
-        with:
-          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}-dbgsym
-          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*-dbgsym.ddeb
-
-      - uses: actions/cache/save@v4
-        if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ github.workspace }}/.ccache
-          key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
+  # Linux builds are currently disabled: uncomment the job below to re-enable them.
+#  ubuntu-build:
+#    name: Build for Ubuntu 🐧
+#    strategy:
+#      matrix:
+#        os: [ubuntu-24.04]
+#    runs-on: ${{ matrix.os }}
+#    needs: check-event
+#    defaults:
+#      run:
+#        shell: bash
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          ref: ${{ inputs.gitRef || github.sha }}
+#          submodules: recursive
+#          fetch-depth: 0
+#
+#      - name: Set Up Environment 🔧
+#        id: setup
+#        run: |
+#          : Set Up Environment 🔧
+#          if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
+#
+#          read -r product_name product_version <<< \
+#            "$(jq -r '. | {name, version} | join(" ")' buildspec.json)"
+#
+#          echo "pluginName=${product_name}" >> $GITHUB_OUTPUT
+#          echo "pluginVersion=${product_version}" >> $GITHUB_OUTPUT
+#
+#      - uses: actions/cache/restore@v4
+#        id: ccache-cache
+#        with:
+#          path: ${{ github.workspace }}/.ccache
+#          key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
+#          restore-keys: |
+#            ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-
+#
+#      - name: Build Plugin 🧱
+#        uses: ./.github/actions/build-plugin
+#        with:
+#          target: x86_64
+#          config: ${{ needs.check-event.outputs.config }}
+#
+#      - name: Package Plugin 📀
+#        uses: ./.github/actions/package-plugin
+#        with:
+#          target: x86_64
+#          config: ${{ needs.check-event.outputs.config }}
+#          package: ${{ fromJSON(needs.check-event.outputs.package) }}
+#
+#      - name: Upload Source Tarball 🗜️
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-sources-${{ needs.check-event.outputs.commitHash }}
+#          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-source.*
+#
+#      - name: Upload Artifacts 📡
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}
+#          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*.*
+#
+#      - name: Upload debug symbol artifacts 🪲
+#        uses: actions/upload-artifact@v4
+#        if: ${{ fromJSON(needs.check-event.outputs.package) }}
+#        with:
+#          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}-dbgsym
+#          path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*-dbgsym.ddeb
+#
+#      - uses: actions/cache/save@v4
+#        if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
+#        with:
+#          path: ${{ github.workspace }}/.ccache
+#          key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
 
   windows-build:
     name: Build for Windows 🪟
@@ -259,6 +308,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.gitRef || github.sha }}
           submodules: recursive
           fetch-depth: 0
 
