@@ -46,6 +46,20 @@ function(_check_deps_version version)
   return(PROPAGATE found CMAKE_PREFIX_PATH)
 endfunction()
 
+# The Debug configuration of the OBS sources is only required for Debug plugin
+# builds. GitHub Actions only ever builds a release configuration, so the Debug
+# pass is skipped there; override with -DOBS_DEPS_SKIP_DEBUG=OFF if needed.
+if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+  set(_obs_deps_skip_debug_default ON)
+else()
+  set(_obs_deps_skip_debug_default OFF)
+endif()
+option(
+  OBS_DEPS_SKIP_DEBUG
+  "Skip building and installing the Debug configuration of the OBS sources"
+  ${_obs_deps_skip_debug_default}
+)
+
 # _setup_obs_studio: Create obs-studio build project, then build libobs and obs-frontend-api
 function(_setup_obs_studio)
   if(NOT libobs_DIR)
@@ -76,15 +90,17 @@ function(_setup_obs_studio)
   )
   message(STATUS "Configure ${label} (${arch}) - done")
 
-  message(STATUS "Build ${label} (Debug - ${arch})")
-  execute_process(
-    COMMAND "${CMAKE_COMMAND}" --build build_${arch} --target obs-frontend-api --config Debug --parallel
-    WORKING_DIRECTORY "${dependencies_dir}/${_obs_destination}"
-    RESULT_VARIABLE _process_result
-    COMMAND_ERROR_IS_FATAL ANY
-    OUTPUT_QUIET
-  )
-  message(STATUS "Build ${label} (Debug - ${arch}) - done")
+  if(NOT OBS_DEPS_SKIP_DEBUG)
+    message(STATUS "Build ${label} (Debug - ${arch})")
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" --build build_${arch} --target obs-frontend-api --config Debug --parallel
+      WORKING_DIRECTORY "${dependencies_dir}/${_obs_destination}"
+      RESULT_VARIABLE _process_result
+      COMMAND_ERROR_IS_FATAL ANY
+      OUTPUT_QUIET
+    )
+    message(STATUS "Build ${label} (Debug - ${arch}) - done")
+  endif()
 
   message(STATUS "Build ${label} (Release - ${arch})")
   execute_process(
@@ -97,14 +113,16 @@ function(_setup_obs_studio)
   message(STATUS "Build ${label} (Reelase - ${arch}) - done")
 
   message(STATUS "Install ${label} (${arch})")
-  execute_process(
-    COMMAND
-      "${CMAKE_COMMAND}" --install build_${arch} --component Development --config Debug --prefix "${dependencies_dir}"
-    WORKING_DIRECTORY "${dependencies_dir}/${_obs_destination}"
-    RESULT_VARIABLE _process_result
-    COMMAND_ERROR_IS_FATAL ANY
-    OUTPUT_QUIET
-  )
+  if(NOT OBS_DEPS_SKIP_DEBUG)
+    execute_process(
+      COMMAND
+        "${CMAKE_COMMAND}" --install build_${arch} --component Development --config Debug --prefix "${dependencies_dir}"
+      WORKING_DIRECTORY "${dependencies_dir}/${_obs_destination}"
+      RESULT_VARIABLE _process_result
+      COMMAND_ERROR_IS_FATAL ANY
+      OUTPUT_QUIET
+    )
+  endif()
   execute_process(
     COMMAND
       "${CMAKE_COMMAND}" --install build_${arch} --component Development --config Release --prefix "${dependencies_dir}"
