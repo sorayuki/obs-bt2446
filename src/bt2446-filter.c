@@ -28,7 +28,9 @@ static gs_effect_t *bt2446_load_effect(void)
 			bfree(error);
 			error = NULL;
 		}
-		effect = gs_effect_create(BT2446_EFFECT_SOURCE, "bt2446.effect", &error);
+		/* BT2446_EFFECT_SOURCE is generated as a zero-terminated byte array. */
+		effect = gs_effect_create((const char *)BT2446_EFFECT_SOURCE,
+					  "bt2446.effect", &error);
 		if (!effect) {
 			blog(LOG_ERROR, "[obs-bt2446-tonemap] embedded effect failed to compile: %s",
 			     error ? error : "(no error reported)");

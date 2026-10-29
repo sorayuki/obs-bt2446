@@ -40,16 +40,19 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/plugin-main.c src/bt2446-filter
 # plugins from <host>/plugins and only resolve module data under
 # <host>/data/plugins, so a data directory next to the DLL is not guaranteed
 # to exist.
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+#
+# The header is produced by a CMake script run through `${CMAKE_COMMAND} -P`, so
+# building the plugin needs nothing beyond the compiler and CMake itself.
 set(_bt2446_generated_header "${CMAKE_CURRENT_BINARY_DIR}/bt2446-resources.h")
 add_custom_command(
   OUTPUT "${_bt2446_generated_header}"
   COMMAND
-    Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/src/gen_resources.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/data/bt2446.effect"
-    "${_bt2446_generated_header}"
+    ${CMAKE_COMMAND}
+    "-DEFFECT=${CMAKE_CURRENT_SOURCE_DIR}/data/bt2446.effect"
+    "-DOUTPUT=${_bt2446_generated_header}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/src/gen_resources.cmake"
   DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/gen_resources.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/gen_resources.cmake"
     "${CMAKE_CURRENT_SOURCE_DIR}/data/bt2446.effect"
   COMMENT "Generating bt2446-resources.h"
   VERBATIM
