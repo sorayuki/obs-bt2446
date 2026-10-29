@@ -1,16 +1,12 @@
 name: Push
 run-name: ${{ github.ref_name }} push run 🚀
 on:
-  # Tag pushes build automatically and produce a draft release. Branch pushes
-  # stay manual: run this workflow by hand from the Actions tab when you want a
-  # build of a branch without cutting a tag.
+  # Only tag pushes build anything. A push to a branch (main, release/**,
+  # feature branches) triggers nothing: no build, no release. Manual runs go
+  # through the "Dispatch" workflow, and they are gated to tags as well.
   push:
     tags:
       - '*'
-  #  branches:
-  #    - master
-  #    - main
-  #    - 'release/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,6 +20,7 @@ jobs:
 
   build-project:
     name: Build Project 🧱
+    if: github.ref_type == 'tag'
     uses: ./.github/workflows/build-project.yaml
     secrets: inherit
     permissions:
