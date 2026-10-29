@@ -1,9 +1,43 @@
 #include <math.h>
 #include <obs-module.h>
 
+#include "bt2446-resources.h"
+
 #define METHOD_A 0
 #define METHOD_B 1
 #define METHOD_C 2
+
+/* Prefer a data-directory copy so a broken shader can be fixed without a
+ * rebuild, but fall back to the embedded source when the host provides no
+ * module data directory. */
+static gs_effect_t *bt2446_load_effect(void)
+{
+	char *effect_path = obs_module_file("bt2446.effect");
+	char *error = NULL;
+	gs_effect_t *effect = NULL;
+
+	if (effect_path) {
+		effect = gs_effect_create_from_file(effect_path, &error);
+		bfree(effect_path);
+	}
+
+	if (!effect) {
+		if (error) {
+			blog(LOG_ERROR, "[obs-bt2446-tonemap] effect '%s' failed to parse: %s",
+			     "bt2446.effect", error);
+			bfree(error);
+			error = NULL;
+		}
+		effect = gs_effect_create(BT2446_EFFECT_SOURCE, "bt2446.effect", &error);
+		if (!effect) {
+			blog(LOG_ERROR, "[obs-bt2446-tonemap] embedded effect failed to compile: %s",
+			     error ? error : "(no error reported)");
+			bfree(error);
+		}
+	}
+
+	return effect;
+}
 
 struct bt2446_filter {
 	obs_source_t *context;
@@ -77,13 +111,12 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 {
 	struct bt2446_filter *filter = bzalloc(sizeof(*filter));
 	filter->context = context;
-	char *effect_path = obs_module_file("bt2446.effect");
 
 	obs_enter_graphics();
-	filter->effect = gs_effect_create_from_file(effect_path, NULL);
+	filter->effect = bt2446_load_effect();
 	obs_leave_graphics();
-	bfree(effect_path);
 	if (!filter->effect) {
+		blog(LOG_ERROR, "[obs-bt2446-tonemap] no usable effect, filter cannot be created");
 		bfree(filter);
 		return NULL;
 	}
