@@ -1,9 +1,10 @@
 name: Push
 run-name: ${{ github.ref_name }} push run 🚀
 on:
-  # Only tag pushes build anything. A push to a branch (main, release/**,
-  # feature branches) triggers nothing: no build, no release. Manual runs go
-  # through the "Dispatch" workflow, and they are gated to tags as well.
+  # Only tag pushes build anything automatically. A push to a branch (main,
+  # release/**, feature branches) triggers nothing: no build, no release.
+  # Manual runs ("Run workflow" or the "Dispatch" workflow) still build the
+  # selected ref; only a tag ref produces a release draft.
   push:
     tags:
       - '*'
@@ -20,7 +21,6 @@ jobs:
 
   build-project:
     name: Build Project 🧱
-    if: github.ref_type == 'tag'
     uses: ./.github/workflows/build-project.yaml
     secrets: inherit
     permissions:
