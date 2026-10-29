@@ -24,6 +24,10 @@ The filter expects linear Rec.709/scRGB input in `GS_CS_709_SCRGB`; OBS defines 
 
 Use the OBS Plugin Template CMake workflow. The plugin requires OBS Studio/libobs development files discoverable by CMake.
 
+## Compatibility
+
+`buildspec.json` pins libobs **32.0.4** with the matching `2025-08-23` obs-deps and Qt6. Some streaming clients ship libobs 32.0.4 and reject any module whose `obs_module_ver()` reports a newer major.minor version, so building against 32.0.4 is what lets the filter load there as well as in OBS Studio. Do not raise the pinned version past 32.0 without checking the host's `obs.dll` file version first; a 32.1+ build is refused with `compiled with newer libobs`.
+
 ## Template provenance
 
 The project started from the Git-tracked files in `D:\dev\obs-dev\obs-plugintemplate` at commit `3e7d7ac3b5342cd7d9b88890b9c70b472d1520fc`. See `TEMPLATE-SOURCE.txt`.
