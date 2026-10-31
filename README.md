@@ -2,6 +2,17 @@
 
 An OBS Studio video filter that converts linear HDR video to SDR using the three HDR-to-SDR methods in ITU-R Report BT.2446-1. The filter runs synchronously in OBS's video render path and outputs SDR sRGB.
 
+## Sample
+
+Source (require HDR monitor):
+![Source](cp2077-source.jpg)
+
+OBS built-in:
+![OBS built-in HDR to SDR conversion](cp2077-obs.jpg)
+
+BT.2446 Method C:
+![BT.2446 C](cp2077-bt2446.jpg)
+
 ## Tone-mapping methods
 
 - **Method A — perceptual matching:** ITU-R BT.2446-1 §4.1, Tables 2–3. Uses the report's perceptual-domain three-segment knee and chroma correction. HDR and SDR peak luminance are configurable; the report reference values are 1,000 and 100 cd/m².
