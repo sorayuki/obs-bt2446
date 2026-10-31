@@ -95,11 +95,15 @@ float3 rgb2020_to_lms(float3 c)
 		      99.0 * c.r + 309.0 * c.g + 3688.0 * c.b) / 4096.0;
 }
 
-float3 lms_to_rgb2020(float3 c)
+/* Method B only uses LMS' to decide whether a colour fits inside the BT.709
+ * volume. It previously converted LMS -> Rec.2020 -> Rec.709 for every probe;
+ * this is the product of those two matrices, so one dot product per channel is
+ * enough. See docs/method-b-rec709-fold.md for the derivation. */
+float3 lms_to_rec709(float3 c)
 {
-	return float3(3.43660669 * c.x - 2.50645212 * c.y + 0.06984542 * c.z,
-		      -0.79132956 * c.x + 1.98360045 * c.y - 0.19227090 * c.z,
-		      -0.02594990 * c.x - 0.09891371 * c.y + 1.12486361 * c.z);
+	return float3(6.1733627370 * c.x - 5.3203805696 * c.y + 0.1470178219 * c.z,
+		      -1.3243115043 * c.x + 2.5602264189 * c.y - 0.2359149247 * c.z,
+		      -0.0118169027 * c.x - 0.2646720292 * c.y + 1.2764889331 * c.z);
 }
 
 float3 lms_prime_to_ictcp(float3 lp)
@@ -116,16 +120,16 @@ float3 ictcp_to_lms_prime(float3 v)
 		      v.x + 0.5600313357 * v.y - 0.3206271750 * v.z);
 }
 
-float3 ictcp_to_rgb2020_nits(float3 v)
+float3 ictcp_to_rec709_nits(float3 v)
 {
 	float3 lms_prime = ictcp_to_lms_prime(v);
-	return lms_to_rgb2020(float3(pq_decode_channel(lms_prime.x), pq_decode_channel(lms_prime.y),
-				     pq_decode_channel(lms_prime.z)));
+	return lms_to_rec709(float3(pq_decode_channel(lms_prime.x), pq_decode_channel(lms_prime.y),
+				    pq_decode_channel(lms_prime.z)));
 }
 
-float in_bt709_volume(float3 rgb2020_nits)
+float in_bt709_volume(float3 rgb709_nits)
 {
-	float3 c = rec2020_to_rec709(rgb2020_nits) / max(sdr_peak_nits, 0.0001);
+	float3 c = rgb709_nits / max(sdr_peak_nits, 0.0001);
 	return (c.r >= -0.0001 && c.g >= -0.0001 && c.b >= -0.0001 &&
 		c.r <= 1.0001 && c.g <= 1.0001 && c.b <= 1.0001) ? 1.0 : 0.0;
 }
@@ -133,8 +137,10 @@ float in_bt709_volume(float3 rgb2020_nits)
 float3 gamut_map_ictcp(float3 rgb2020_nits)
 {
 	// BT.2446-1 §5.2.4: desaturate out-of-volume colours in ICtCp, preserving I and hue.
-	if (in_bt709_volume(rgb2020_nits) > 0.5)
-		return rgb2020_nits;
+	// The search is performed against the BT.709 volume, so its result is Rec.709.
+	float3 rgb709_nits = rec2020_to_rec709(rgb2020_nits);
+	if (in_bt709_volume(rgb709_nits) > 0.5)
+		return rgb709_nits;
 
 	float3 ictcp = lms_prime_to_ictcp(pq_encode(rgb2020_to_lms(max(rgb2020_nits, 0.0))));
 	float low = 0.0;
@@ -143,30 +149,30 @@ float3 gamut_map_ictcp(float3 rgb2020_nits)
 	float3 candidate = float3(0.0, 0.0, 0.0);
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
 	mid = 0.5 * (low + high);
-	candidate = ictcp_to_rgb2020_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
+	candidate = ictcp_to_rec709_nits(float3(ictcp.x, mid * ictcp.y, mid * ictcp.z));
 	if (in_bt709_volume(candidate) > 0.5) low = mid; else high = mid;
 
-	return ictcp_to_rgb2020_nits(float3(ictcp.x, low * ictcp.y, low * ictcp.z));
+	return ictcp_to_rec709_nits(float3(ictcp.x, low * ictcp.y, low * ictcp.z));
 }
 
 float hlg_system_gamma(float lw)
@@ -248,8 +254,9 @@ float3 map_method_b(float3 rgb2020_nits)
 	float scale = y > 0.0001 ? mapped_y / y : 1.0;
 
 	// §5.2.4: hard-clip to the BT.709 volume by hue-preserving desaturation in ICtCp.
-	float3 mapped2020_nits = gamut_map_ictcp(light_nits * scale);
-	return saturate(mapped2020_nits / max(sdr_peak_nits, 0.0001));
+	// gamut_map_ictcp() returns Rec.709 nits because that volume is its boundary.
+	float3 mapped709_nits = gamut_map_ictcp(light_nits * scale);
+	return saturate(mapped709_nits / max(sdr_peak_nits, 0.0001));
 }
 
 float lab_f(float value)
@@ -322,8 +329,8 @@ float4 PSDefault(FragData f_in) : TARGET
 		float3 nonlinear_sdr = map_method_a(normalized2020);
 		result_target = rec2020_to_rec709(signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits) * output_scale;
 	} else if (method < 1.5) {
-		result_target = rec2020_to_rec709(map_method_b(rec709_to_rec2020(source_nits)) * sdr_peak_nits) *
-				output_scale;
+		/* Method B's gamut mapper already returns Rec.709, its clipping boundary. */
+		result_target = map_method_b(rec709_to_rec2020(source_nits)) * sdr_peak_nits * output_scale;
 	} else {
 		/* Method C folds the Rec.2020 round trip into its own matrices, so it
 		 * consumes and emits Rec.709 nits directly. */
