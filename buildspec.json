@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "org.obsproject.bt2446-tonemap"
+            "bundleId": "net.sorayuki.bt2446-tonemap"
         }
     },
     "name": "obs-bt2446-tonemap",
     "displayName": "BT.2446 HDR to SDR Tone Mapper",
     "version": "1.0.2",
-    "author": "OBS BT.2446",
-    "website": "https://www.itu.int/rec/R-REP-BT.2446",
-    "email": ""
+    "author": "SoraYuki",
+    "website": "https://github.com/sorayuki",
+    "email": "me@example.com"
 }
