@@ -2,7 +2,6 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float input_scale;
 uniform float output_scale;
-uniform float method;
 uniform float sdr_peak_nits;
 uniform float b_knee_nits;
 uniform float b_hlg_shaping;
@@ -327,33 +326,65 @@ float3 map_method_c(float3 rgb709_nits)
 		      dot(c_matrix_out_2, xyz_sdr)) / 100.0;
 }
 
-float4 PSDefault(FragData f_in) : TARGET
+/* Each method has its own pixel shader and technique. Keeping them in one
+ * branch made every pixel carry the union of all three algorithms in registers
+ * and instruction cache. The selected technique is chosen by the CPU in
+ * bt2446_filter_render().
+ *
+ * Each shader writes 1.0 = the target's white level, so the compositor can
+ * treat the result as plain SDR. */
+float4 PSMethodA(FragData f_in) : TARGET
 {
 	float4 rgba = image.Sample(textureSampler, f_in.uv);
 	float3 source_nits = rgba.rgb * input_scale;
-	float3 result_target;
-	if (method < 0.5) {
-		float3 normalized2020 = rec709_to_rec2020(source_nits) * inv_hdr_peak_nits;
-		float3 nonlinear_sdr = map_method_a(normalized2020);
-		result_target = rec2020_to_rec709(signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits) * output_scale;
-	} else if (method < 1.5) {
-		/* Method B's gamut mapper already returns Rec.709, its clipping boundary. */
-		result_target = map_method_b(rec709_to_rec2020(source_nits)) * sdr_peak_nits * output_scale;
-	} else {
-		/* Method C folds the Rec.2020 round trip into its own matrices, so it
-		 * consumes and emits Rec.709 nits directly. */
-		result_target = map_method_c(source_nits) * sdr_peak_nits * output_scale;
-	}
-	// Write the result in the convention of the target space (1.0 = the target's
-	// white level) so the compositor can treat the source as plain SDR.
+	float3 normalized2020 = rec709_to_rec2020(source_nits) * inv_hdr_peak_nits;
+	float3 nonlinear_sdr = map_method_a(normalized2020);
+	float3 result_target = rec2020_to_rec709(signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits) * output_scale;
 	return float4(result_target, rgba.a);
 }
 
-technique Draw
+float4 PSMethodB(FragData f_in) : TARGET
+{
+	float4 rgba = image.Sample(textureSampler, f_in.uv);
+	float3 source_nits = rgba.rgb * input_scale;
+	/* Method B's gamut mapper already returns Rec.709, its clipping boundary. */
+	float3 result_target = map_method_b(rec709_to_rec2020(source_nits)) * sdr_peak_nits * output_scale;
+	return float4(result_target, rgba.a);
+}
+
+float4 PSMethodC(FragData f_in) : TARGET
+{
+	float4 rgba = image.Sample(textureSampler, f_in.uv);
+	float3 source_nits = rgba.rgb * input_scale;
+	/* Method C folds the Rec.2020 round trip into its own matrices, so it
+	 * consumes and emits Rec.709 nits directly. */
+	float3 result_target = map_method_c(source_nits) * sdr_peak_nits * output_scale;
+	return float4(result_target, rgba.a);
+}
+
+technique DrawMethodA
 {
 	pass
 	{
 		vertex_shader = VSDefault(v_in);
-		pixel_shader = PSDefault(f_in);
+		pixel_shader = PSMethodA(f_in);
+	}
+}
+
+technique DrawMethodB
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader = PSMethodB(f_in);
+	}
+}
+
+technique DrawMethodC
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader = PSMethodC(f_in);
 	}
 }

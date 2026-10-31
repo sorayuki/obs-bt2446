@@ -44,7 +44,6 @@ static gs_effect_t *bt2446_load_effect(void)
 struct bt2446_filter {
 	obs_source_t *context;
 	gs_effect_t *effect;
-	gs_eparam_t *method;
 	gs_eparam_t *sdr_peak;
 	gs_eparam_t *b_knee;
 	gs_eparam_t *b_hlg_shaping;
@@ -278,7 +277,6 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 		return NULL;
 	}
 
-	filter->method = gs_effect_get_param_by_name(filter->effect, "method");
 	filter->sdr_peak = gs_effect_get_param_by_name(filter->effect, "sdr_peak_nits");
 	filter->b_knee = gs_effect_get_param_by_name(filter->effect, "b_knee_nits");
 	filter->b_hlg_shaping = gs_effect_get_param_by_name(filter->effect, "b_hlg_shaping");
@@ -477,6 +475,19 @@ static float target_white_nits(enum gs_color_space space)
 	}
 }
 
+static const char *filter_technique_name(int method)
+{
+	switch (method) {
+	case METHOD_B:
+		return "DrawMethodB";
+	case METHOD_C:
+		return "DrawMethodC";
+	case METHOD_A:
+	default:
+		return "DrawMethodA";
+	}
+}
+
 static void bt2446_filter_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
@@ -501,7 +512,6 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 							     OBS_NO_DIRECT_RENDERING))
 		return;
 
-	gs_effect_set_float(filter->method, (float)filter->selected_method);
 	gs_effect_set_float(filter->sdr_peak, filter->sdr_peak_nits);
 	gs_effect_set_float(filter->b_knee, filter->b_knee_nits);
 	gs_effect_set_float(filter->b_hlg_shaping, filter->b_hlg_shaping_value);
@@ -541,7 +551,8 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 
 	gs_blend_state_push();
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
-	obs_source_process_filter_tech_end(filter->context, filter->effect, 0, 0, "Draw");
+	obs_source_process_filter_tech_end(filter->context, filter->effect, 0, 0,
+					   filter_technique_name(filter->selected_method));
 	gs_blend_state_pop();
 }
 
