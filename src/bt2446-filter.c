@@ -23,7 +23,7 @@ static gs_effect_t *bt2446_load_effect(void)
 
 	if (!effect) {
 		if (error) {
-			blog(LOG_ERROR, "[obs-bt2446-tonemap] effect '%s' failed to parse: %s",
+			blog(LOG_ERROR, "[sorayuki-bt2446-tonemap] effect '%s' failed to parse: %s",
 			     "bt2446.effect", error);
 			bfree(error);
 			error = NULL;
@@ -32,7 +32,7 @@ static gs_effect_t *bt2446_load_effect(void)
 		effect = gs_effect_create((const char *)BT2446_EFFECT_SOURCE,
 					  "bt2446.effect", &error);
 		if (!effect) {
-			blog(LOG_ERROR, "[obs-bt2446-tonemap] embedded effect failed to compile: %s",
+			blog(LOG_ERROR, "[sorayuki-bt2446-tonemap] embedded effect failed to compile: %s",
 			     error ? error : "(no error reported)");
 			bfree(error);
 		}
@@ -118,7 +118,7 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 	filter->effect = bt2446_load_effect();
 	obs_leave_graphics();
 	if (!filter->effect) {
-		blog(LOG_ERROR, "[obs-bt2446-tonemap] no usable effect, filter cannot be created");
+		blog(LOG_ERROR, "[sorayuki-bt2446-tonemap] no usable effect, filter cannot be created");
 		bfree(filter);
 		return NULL;
 	}

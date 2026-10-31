@@ -28,7 +28,7 @@ Use the OBS Plugin Template CMake workflow. The plugin requires OBS Studio/libob
 
 `buildspec.json` pins libobs **32.0.4** with the matching `2025-08-23` obs-deps and Qt6. Some streaming clients ship libobs 32.0.4 and reject any module whose `obs_module_ver()` reports a newer major.minor version, so building against 32.0.4 is what lets the filter load there as well as in OBS Studio. Do not raise the pinned version past 32.0 without checking the host's `obs.dll` file version first; a 32.1+ build is refused with `compiled with newer libobs`.
 
-The effect source is embedded in the module at build time, so a lone `obs-bt2446-tonemap.dll` is enough to create the filter. Such hosts load plugins from `<host>/plugins` and resolve module data under `<host>/data/plugins`, so a per-module data directory next to the DLL is not available there; `data/bt2446.effect` still takes precedence when a host does provide one, which keeps the shader patchable without a rebuild.
+The effect source is embedded in the module at build time, so a lone `sorayuki-bt2446-tonemap.dll` is enough to create the filter. Such hosts load plugins from `<host>/plugins` and resolve module data under `<host>/data/plugins`, so a per-module data directory next to the DLL is not available there; `data/bt2446.effect` still takes precedence when a host does provide one, which keeps the shader patchable without a rebuild.
 
 ## Template provenance
 
