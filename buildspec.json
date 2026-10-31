@@ -38,7 +38,7 @@
     },
     "name": "sorayuki-bt2446-tonemap",
     "displayName": "BT.2446 HDR to SDR Tone Mapper",
-    "version": "1.0.2",
+    "version": "1.0.4",
     "author": "SoraYuki",
     "website": "https://github.com/sorayuki",
     "email": "me@example.com"

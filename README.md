@@ -10,14 +10,18 @@ Put the extracted folder into ```C:\ProgramData\obs-studio\plugins``` and restar
 
 ## Sample
 
-Source (require HDR monitor):
-![Source](cp2077-source.jpg)
-
 OBS built-in:
 ![OBS built-in HDR to SDR conversion](cp2077-obs.jpg)
 
 BT.2446 Method C:
 ![BT.2446 C](cp2077-bt2446.jpg)
+
+<details>
+<summary>Original HDR source (Ultra HDR JPEG — lit up on an HDR display in Chrome; SDR viewers see the base layer)</summary>
+
+![Source](cp2077-source.jpg)
+
+</details>
 
 ## Tone-mapping methods
 
