@@ -10,7 +10,16 @@ uniform float b_strength_nits;
 uniform float b_slope;
 uniform float b_hlg_shaping;
 uniform float b_input_lw_nits;
-uniform float c_alpha;
+/* Method C's linear front and back ends, pre-multiplied on the CPU because
+ * every step between the Rec.709 input and the tone curve is a 3x3 matrix, and
+ * the tone curve itself only rescales the XYZ triple. See
+ * docs/method-c-matrix-folding.md for the derivation. */
+uniform float3 c_matrix_in_0;
+uniform float3 c_matrix_in_1;
+uniform float3 c_matrix_in_2;
+uniform float3 c_matrix_out_0;
+uniform float3 c_matrix_out_1;
+uniform float3 c_matrix_out_2;
 uniform float c_k1;
 uniform float c_k2;
 uniform float c_k3;
@@ -243,13 +252,6 @@ float3 map_method_b(float3 rgb2020_nits)
 	return saturate(mapped2020_nits / max(sdr_peak_nits, 0.0001));
 }
 
-float3 crosstalk(float3 rgb, float alpha)
-{
-	return float3((1.0 - 2.0 * alpha) * rgb.r + alpha * rgb.g + alpha * rgb.b,
-		      alpha * rgb.r + (1.0 - 2.0 * alpha) * rgb.g + alpha * rgb.b,
-		      alpha * rgb.r + alpha * rgb.g + (1.0 - 2.0 * alpha) * rgb.b);
-}
-
 float lab_f(float value)
 {
 	float delta = 6.0 / 29.0;
@@ -263,22 +265,19 @@ float lab_f_inverse(float value)
 	return value > delta ? value * value * value : 3.0 * delta * delta * (value - 4.0 / 29.0);
 }
 
-float3 inverse_crosstalk(float3 rgb, float alpha)
+float3 map_method_c(float3 rgb709_nits)
 {
-	float mean = (rgb.r + rgb.g + rgb.b) / 3.0;
-	return (rgb - mean) / max(1.0 - 3.0 * alpha, 0.01) + mean;
-}
-
-float3 map_method_c(float3 rgb2020)
-{
-	// BT.2446-1 §6.1.2–§6.1.7: crosstalk, Yxy luminance knee, inverse matrix and SDR EOTF.
-	float3 rgb_x = crosstalk(rgb2020 * hdr_peak_nits, c_alpha);
-	float3 xyz = float3(dot(rgb_x, float3(0.6370, 0.1446, 0.1689)),
-			    dot(rgb_x, float3(0.2627, 0.6780, 0.0593)),
-			    dot(rgb_x, float3(0.0000, 0.0281, 1.0610)));
+	// BT.2446-1 §6.1.2–§6.1.7. The Rec.709 to Rec.2020 conversion, the crosstalk
+	// matrix and the Rec.2020 to XYZ conversion are three consecutive linear
+	// maps, so they arrive here already multiplied together as c_matrix_in.
+	float3 xyz = float3(dot(c_matrix_in_0, rgb709_nits),
+			    dot(c_matrix_in_1, rgb709_nits),
+			    dot(c_matrix_in_2, rgb709_nits));
 	float sum = xyz.x + xyz.y + xyz.z;
 	if (xyz.y <= 0.0 || sum <= 0.00001)
-		return rgb2020 * c_k1 * hdr_peak_nits / 100.0;
+		// Scaling the Rec.2020 copy of the input cancels against the matrices
+		// folded into c_matrix_out, so the Rec.709 input can be scaled directly.
+		return rgb709_nits * c_k1 / 100.0;
 	float2 xy = float2(xyz.x, xyz.y) / sum;
 
 	if (c_white_shift > 0.0 && xyz.y > c_hdr_reference_white_nits) {
@@ -306,31 +305,32 @@ float3 map_method_c(float3 rgb2020)
 	float3 xyz_sdr = float3(xy.x / max(xy.y, 0.00001) * mapped_y,
 				mapped_y,
 				(1.0 - xy.x - xy.y) / max(xy.y, 0.00001) * mapped_y);
-	float3 rgb_sdr = float3(
-		dot(xyz_sdr, float3(1.7167, -0.3557, -0.2534)),
-		dot(xyz_sdr, float3(-0.6667, 1.6165, 0.0158)),
-		dot(xyz_sdr, float3(0.0176, -0.0428, 0.9421)));
-	return inverse_crosstalk(rgb_sdr, c_alpha) / 100.0;
+	// XYZ to Rec.2020, inverse crosstalk and Rec.2020 to Rec.709, likewise
+	// folded into c_matrix_out. The result is already Rec.709 SDR nits.
+	return float3(dot(c_matrix_out_0, xyz_sdr),
+		      dot(c_matrix_out_1, xyz_sdr),
+		      dot(c_matrix_out_2, xyz_sdr)) / 100.0;
 }
 
 float4 PSDefault(FragData f_in) : TARGET
 {
 	float4 rgba = image.Sample(textureSampler, f_in.uv);
 	float3 source_nits = rgba.rgb * input_scale;
-	float3 linear2020 = rec709_to_rec2020(source_nits);
-	float3 normalized2020 = linear2020 / max(hdr_peak_nits, 0.0001);
-	float3 result2020;
+	float3 result_target;
 	if (method < 0.5) {
+		float3 normalized2020 = rec709_to_rec2020(source_nits) / max(hdr_peak_nits, 0.0001);
 		float3 nonlinear_sdr = map_method_a(normalized2020);
-		result2020 = signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits;
+		result_target = rec2020_to_rec709(signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits) * output_scale;
 	} else if (method < 1.5) {
-		result2020 = map_method_b(linear2020) * sdr_peak_nits;
+		result_target = rec2020_to_rec709(map_method_b(rec709_to_rec2020(source_nits)) * sdr_peak_nits) *
+				output_scale;
 	} else {
-		result2020 = map_method_c(normalized2020) * sdr_peak_nits;
+		/* Method C folds the Rec.2020 round trip into its own matrices, so it
+		 * consumes and emits Rec.709 nits directly. */
+		result_target = map_method_c(source_nits) * sdr_peak_nits * output_scale;
 	}
 	// Write the result in the convention of the target space (1.0 = the target's
 	// white level) so the compositor can treat the source as plain SDR.
-	float3 result_target = rec2020_to_rec709(result2020) * output_scale;
 	return float4(result_target, rgba.a);
 }
 

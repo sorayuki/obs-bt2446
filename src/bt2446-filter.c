@@ -52,7 +52,8 @@ struct bt2446_filter {
 	gs_eparam_t *b_slope_param;
 	gs_eparam_t *b_hlg_shaping;
 	gs_eparam_t *b_input_lw;
-	gs_eparam_t *c_alpha;
+	gs_eparam_t *c_matrix_in[3];
+	gs_eparam_t *c_matrix_out[3];
 	gs_eparam_t *c_k1;
 	gs_eparam_t *c_k2;
 	gs_eparam_t *c_k3;
@@ -71,6 +72,8 @@ struct bt2446_filter {
 	float b_hlg_shaping_value;
 	float b_input_lw_nits;
 	float c_alpha_value;
+	float c_matrix_in_values[3][3];
+	float c_matrix_out_values[3][3];
 	float c_k1_value;
 	float c_k2_value;
 	float c_k3_value;
@@ -81,6 +84,83 @@ struct bt2446_filter {
 	float c_sdr_reference_white_percent;
 	float c_white_shift_value;
 };
+
+/* Colour-space matrices used by Method C. These are the same constants that used
+ * to sit inline in the effect, kept here so the folded products are derived from
+ * exactly the numbers that were being applied before. */
+static const double matrix_709_to_2020[3][3] = {
+	{0.6274038959, 0.3292830384, 0.0433130657},
+	{0.0690972894, 0.9195403951, 0.0113623156},
+	{0.0163914389, 0.0880133079, 0.8955952532},
+};
+
+static const double matrix_2020_to_709[3][3] = {
+	{1.6604910021, -0.5876411388, -0.0728498633},
+	{-0.1245504745, 1.1328998971, -0.0083494226},
+	{-0.0181507634, -0.1005788980, 1.1187296614},
+};
+
+static const double matrix_2020_to_xyz[3][3] = {
+	{0.6370, 0.1446, 0.1689},
+	{0.2627, 0.6780, 0.0593},
+	{0.0000, 0.0281, 1.0610},
+};
+
+static const double matrix_xyz_to_2020[3][3] = {
+	{1.7167, -0.3557, -0.2534},
+	{-0.6667, 1.6165, 0.0158},
+	{0.0176, -0.0428, 0.9421},
+};
+
+static void matrix3_multiply(const double a[3][3], const double b[3][3], double out[3][3])
+{
+	for (size_t row = 0; row < 3; ++row) {
+		for (size_t col = 0; col < 3; ++col) {
+			out[row][col] = a[row][0] * b[0][col] + a[row][1] * b[1][col] +
+					a[row][2] * b[2][col];
+		}
+	}
+}
+
+/* Method C runs Rec.709 -> Rec.2020 -> crosstalk -> XYZ, applies the tone curve,
+ * then XYZ -> Rec.2020 -> inverse crosstalk -> Rec.709. Every step outside the
+ * curve is a 3x3 matrix and the curve only rescales the XYZ triple, so each half
+ * collapses into one matrix. The derivation is in
+ * docs/method-c-matrix-folding.md. */
+static void build_method_c_matrices(struct bt2446_filter *filter)
+{
+	const double alpha = filter->c_alpha_value;
+	/* Same floor the shader used to apply inline when alpha reaches 1/3. */
+	const double inverse_scale = 1.0 / fmax(1.0 - 3.0 * alpha, 0.01);
+	double crosstalk[3][3];
+	double crosstalk_inverse[3][3];
+	double product[3][3];
+	double result[3][3];
+
+	for (size_t row = 0; row < 3; ++row) {
+		for (size_t col = 0; col < 3; ++col) {
+			const double identity = row == col ? 1.0 : 0.0;
+			/* (1 - 3a)I + aJ */
+			crosstalk[row][col] = (row == col ? 1.0 - 3.0 * alpha : 0.0) + alpha;
+			/* (I - J/3)/(1 - 3a) + J/3, which is its exact inverse. */
+			crosstalk_inverse[row][col] = (identity - 1.0 / 3.0) * inverse_scale + 1.0 / 3.0;
+		}
+	}
+
+	matrix3_multiply(matrix_2020_to_xyz, crosstalk, product);
+	matrix3_multiply(product, matrix_709_to_2020, result);
+	for (size_t row = 0; row < 3; ++row) {
+		for (size_t col = 0; col < 3; ++col)
+			filter->c_matrix_in_values[row][col] = (float)result[row][col];
+	}
+
+	matrix3_multiply(matrix_2020_to_709, crosstalk_inverse, product);
+	matrix3_multiply(product, matrix_xyz_to_2020, result);
+	for (size_t row = 0; row < 3; ++row) {
+		for (size_t col = 0; col < 3; ++col)
+			filter->c_matrix_out_values[row][col] = (float)result[row][col];
+	}
+}
 
 static float solve_c_k3(const struct bt2446_filter *filter, float knee_hdr)
 {
@@ -131,7 +211,12 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 	filter->b_slope_param = gs_effect_get_param_by_name(filter->effect, "b_slope");
 	filter->b_hlg_shaping = gs_effect_get_param_by_name(filter->effect, "b_hlg_shaping");
 	filter->b_input_lw = gs_effect_get_param_by_name(filter->effect, "b_input_lw_nits");
-	filter->c_alpha = gs_effect_get_param_by_name(filter->effect, "c_alpha");
+	filter->c_matrix_in[0] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_0");
+	filter->c_matrix_in[1] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_1");
+	filter->c_matrix_in[2] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_2");
+	filter->c_matrix_out[0] = gs_effect_get_param_by_name(filter->effect, "c_matrix_out_0");
+	filter->c_matrix_out[1] = gs_effect_get_param_by_name(filter->effect, "c_matrix_out_1");
+	filter->c_matrix_out[2] = gs_effect_get_param_by_name(filter->effect, "c_matrix_out_2");
 	filter->c_k1 = gs_effect_get_param_by_name(filter->effect, "c_k1");
 	filter->c_k2 = gs_effect_get_param_by_name(filter->effect, "c_k2");
 	filter->c_k3 = gs_effect_get_param_by_name(filter->effect, "c_k3");
@@ -178,6 +263,7 @@ static void bt2446_filter_update(void *data, obs_data_t *settings)
 	filter->c_k2_value = filter->c_k1_value * (1.0f - filter->c_k3_value) * filter->c_knee_hdr_nits;
 	filter->c_k4_value = filter->c_k1_value * filter->c_knee_hdr_nits -
 			     filter->c_k2_value * logf(1.0f - filter->c_k3_value);
+	build_method_c_matrices(filter);
 }
 
 static bool method_changed(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
@@ -332,7 +418,10 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 	gs_effect_set_float(filter->b_slope_param, filter->b_slope_value);
 	gs_effect_set_float(filter->b_hlg_shaping, filter->b_hlg_shaping_value);
 	gs_effect_set_float(filter->b_input_lw, filter->b_input_lw_nits);
-	gs_effect_set_float(filter->c_alpha, filter->c_alpha_value);
+	for (size_t i = 0; i < 3; ++i) {
+		gs_effect_set_val(filter->c_matrix_in[i], filter->c_matrix_in_values[i], sizeof(float) * 3);
+		gs_effect_set_val(filter->c_matrix_out[i], filter->c_matrix_out_values[i], sizeof(float) * 3);
+	}
 	gs_effect_set_float(filter->c_k1, filter->c_k1_value);
 	gs_effect_set_float(filter->c_k2, filter->c_k2_value);
 	gs_effect_set_float(filter->c_k3, filter->c_k3_value);
