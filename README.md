@@ -2,6 +2,12 @@
 
 An OBS Studio video filter that converts linear HDR video to SDR using the three HDR-to-SDR methods in ITU-R Report BT.2446-1. The filter runs synchronously in OBS's video render path and outputs SDR sRGB.
 
+## How to install
+
+It Requires OBS 32.0.2 or newer.
+
+Put the extracted folder into ```C:\ProgramData\obs-studio\plugins``` and restart OBS. You got it.
+
 ## Sample
 
 Source (require HDR monitor):
