@@ -3,13 +3,28 @@ uniform texture2d image;
 uniform float input_scale;
 uniform float output_scale;
 uniform float method;
-uniform float hdr_peak_nits;
 uniform float sdr_peak_nits;
 uniform float b_knee_nits;
-uniform float b_strength_nits;
-uniform float b_slope;
 uniform float b_hlg_shaping;
-uniform float b_input_lw_nits;
+/* Values derived from the filter settings on the CPU. They are constants for a
+ * whole draw, so the shader must not repeat their pow(), log() or division on
+ * every pixel. docs/hoisting-uniform-constants.md lists each identity. */
+uniform float a_rho_hdr;
+uniform float a_inv_log_rho_hdr;
+uniform float a_rho_sdr;
+uniform float a_inv_rho_sdr_minus_one;
+uniform float b_inv_lw_nits;
+uniform float b_hlg_inv_gamma;
+uniform float b_hlg_exponent;
+uniform float b_hlg_ratio;
+uniform float b_strength_over_slope;
+uniform float b_slope_over_strength;
+uniform float c_white_x_nits;
+uniform float c_white_y_nits;
+uniform float c_white_z_nits;
+uniform float c_peak_lightness;
+uniform float inv_hdr_peak_nits;
+uniform float inv_sdr_peak_nits;
 /* Method C's linear front and back ends, pre-multiplied on the CPU because
  * every step between the Rec.709 input and the tone curve is a 3x3 matrix, and
  * the tone curve itself only rescales the XYZ triple. See
@@ -129,7 +144,7 @@ float3 ictcp_to_rec709_nits(float3 v)
 
 float in_bt709_volume(float3 rgb709_nits)
 {
-	float3 c = rgb709_nits / max(sdr_peak_nits, 0.0001);
+	float3 c = rgb709_nits * inv_sdr_peak_nits;
 	return (c.r >= -0.0001 && c.g >= -0.0001 && c.b >= -0.0001 &&
 		c.r <= 1.0001 && c.g <= 1.0001 && c.b <= 1.0001) ? 1.0 : 0.0;
 }
@@ -175,22 +190,18 @@ float3 gamut_map_ictcp(float3 rgb2020_nits)
 	return ictcp_to_rec709_nits(float3(ictcp.x, low * ictcp.y, low * ictcp.z));
 }
 
-float hlg_system_gamma(float lw)
-{
-	return 1.2 + 0.42 * (log(max(lw, 1.0) / 1000.0) * 0.4342944819);
-}
-
 float3 hlg_shape_to_291(float3 light_nits)
 {
 	// BT.2446-1 §5.2.1: decode the HLG signal at Lw = 291 cd/m2 with gamma 1.03.
-	float lw_in = max(b_input_lw_nits, 1.0);
+	// The CPU evaluates the system gamma at the configured Lw and supplies the
+	// resulting exponents and scale, so only the two content-dependent pow()
+	// calls remain here.
 	float y = dot(light_nits, float3(0.2627, 0.6780, 0.0593));
 	if (y <= 0.0)
 		return light_nits;
 
-	float gamma_in = hlg_system_gamma(lw_in);
-	float y_scene = pow(y / lw_in, 1.0 / gamma_in);
-	float ratio = (291.0 / lw_in) * pow(max(y_scene, 0.00001), 1.03 - gamma_in);
+	float y_scene = pow(y * b_inv_lw_nits, b_hlg_inv_gamma);
+	float ratio = b_hlg_ratio * pow(max(y_scene, 0.00001), b_hlg_exponent);
 	return light_nits * ratio;
 }
 
@@ -207,8 +218,8 @@ float3 signed_power3(float3 value, float exponent)
 float map_method_a_luma(float y)
 {
 	// BT.2446-1 §4.1, Table 2: perceptual linearization, three-segment knee and inverse perceptual transform.
-	float rho_hdr = 1.0 + 32.0 * pow(hdr_peak_nits / 10000.0, 1.0 / 2.4);
-	float y_perceptual = log(1.0 + (rho_hdr - 1.0) * max(y, 0.0)) / log(rho_hdr);
+	// rho and the log denominator depend only on the configured peaks.
+	float y_perceptual = log(1.0 + a_rho_hdr * max(y, 0.0)) * a_inv_log_rho_hdr;
 	float y_compressed;
 	if (y_perceptual <= 0.7399)
 		y_compressed = 1.0770 * y_perceptual;
@@ -217,8 +228,7 @@ float map_method_a_luma(float y)
 	else
 		y_compressed = 0.5 * y_perceptual + 0.5;
 
-	float rho_sdr = 1.0 + 32.0 * pow(sdr_peak_nits / 10000.0, 1.0 / 2.4);
-	return max((pow(rho_sdr, y_compressed) - 1.0) / (rho_sdr - 1.0), 0.0);
+	return max((pow(a_rho_sdr, y_compressed) - 1.0) * a_inv_rho_sdr_minus_one, 0.0);
 }
 
 float3 map_method_a(float3 rgb2020)
@@ -247,16 +257,16 @@ float3 map_method_b(float3 rgb2020_nits)
 	// §5.2.2–§5.2.3: scale luminance only (chroma is unchanged), 1:1 below the knee.
 	float y = dot(light_nits, float3(0.2627, 0.6780, 0.0593));
 	float knee = max(b_knee_nits, 0.0001);
-	float strength = max(b_strength_nits, 0.0001);
-	float slope = max(b_slope, 0.0001);
 	float y_pos = max(y, 0.0);
-	float mapped_y = y_pos <= knee ? y_pos : knee + strength / slope * log(1.0 + slope * (y_pos - knee) / strength);
+	float mapped_y = y_pos <= knee
+		? y_pos
+		: knee + b_strength_over_slope * log(1.0 + b_slope_over_strength * (y_pos - knee));
 	float scale = y > 0.0001 ? mapped_y / y : 1.0;
 
 	// §5.2.4: hard-clip to the BT.709 volume by hue-preserving desaturation in ICtCp.
 	// gamut_map_ictcp() returns Rec.709 nits because that volume is its boundary.
 	float3 mapped709_nits = gamut_map_ictcp(light_nits * scale);
-	return saturate(mapped709_nits / max(sdr_peak_nits, 0.0001));
+	return saturate(mapped709_nits * inv_sdr_peak_nits);
 }
 
 float lab_f(float value)
@@ -289,16 +299,14 @@ float3 map_method_c(float3 rgb709_nits)
 
 	if (c_white_shift > 0.0 && xyz.y > c_hdr_reference_white_nits) {
 		// BT.2446-1 §6.1.8: optionally reduce highlight chroma in CIE L*a*b* above HDR reference white.
-		float3 white = float3(c_hdr_reference_white_nits * 192.93 / 203.0,
-				      c_hdr_reference_white_nits,
-				      c_hdr_reference_white_nits * 221.05 / 203.0);
+		// The D65 white for the configured reference level and the peak's
+		// lightness are settings, not pixel data, and are precomputed on the CPU.
+		float3 white = float3(c_white_x_nits, c_white_y_nits, c_white_z_nits);
 		float fx = lab_f(xyz.x / white.x);
 		float fy = lab_f(xyz.y / white.y);
 		float fz = lab_f(xyz.z / white.z);
 		float lightness = 116.0 * fy - 16.0;
-		float peak_lightness = max(116.0 * lab_f(hdr_peak_nits / max(c_hdr_reference_white_nits, 0.0001)) - 16.0,
-				   100.0001);
-		float correction = saturate(c_white_shift * saturate((lightness - 100.0) / (peak_lightness - 100.0)));
+		float correction = saturate(c_white_shift * saturate((lightness - 100.0) / (c_peak_lightness - 100.0)));
 		float a = 500.0 * (fx - fy) * (1.0 - correction);
 		float b = 200.0 * (fy - fz) * (1.0 - correction);
 		xyz.x = lab_f_inverse(fy + a / 500.0) * white.x;
@@ -325,7 +333,7 @@ float4 PSDefault(FragData f_in) : TARGET
 	float3 source_nits = rgba.rgb * input_scale;
 	float3 result_target;
 	if (method < 0.5) {
-		float3 normalized2020 = rec709_to_rec2020(source_nits) / max(hdr_peak_nits, 0.0001);
+		float3 normalized2020 = rec709_to_rec2020(source_nits) * inv_hdr_peak_nits;
 		float3 nonlinear_sdr = map_method_a(normalized2020);
 		result_target = rec2020_to_rec709(signed_power3(nonlinear_sdr, 2.4) * sdr_peak_nits) * output_scale;
 	} else if (method < 1.5) {

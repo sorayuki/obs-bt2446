@@ -45,13 +45,25 @@ struct bt2446_filter {
 	obs_source_t *context;
 	gs_effect_t *effect;
 	gs_eparam_t *method;
-	gs_eparam_t *hdr_peak;
 	gs_eparam_t *sdr_peak;
 	gs_eparam_t *b_knee;
-	gs_eparam_t *b_strength;
-	gs_eparam_t *b_slope_param;
 	gs_eparam_t *b_hlg_shaping;
-	gs_eparam_t *b_input_lw;
+	gs_eparam_t *a_rho_hdr;
+	gs_eparam_t *a_inv_log_rho_hdr;
+	gs_eparam_t *a_rho_sdr;
+	gs_eparam_t *a_inv_rho_sdr_minus_one;
+	gs_eparam_t *b_inv_lw_nits;
+	gs_eparam_t *b_hlg_inv_gamma;
+	gs_eparam_t *b_hlg_exponent;
+	gs_eparam_t *b_hlg_ratio;
+	gs_eparam_t *b_strength_over_slope;
+	gs_eparam_t *b_slope_over_strength;
+	gs_eparam_t *c_white_x;
+	gs_eparam_t *c_white_y;
+	gs_eparam_t *c_white_z;
+	gs_eparam_t *c_peak_lightness;
+	gs_eparam_t *inv_hdr_peak;
+	gs_eparam_t *inv_sdr_peak;
 	gs_eparam_t *c_matrix_in[3];
 	gs_eparam_t *c_matrix_out[3];
 	gs_eparam_t *c_k1;
@@ -71,6 +83,22 @@ struct bt2446_filter {
 	float b_slope_value;
 	float b_hlg_shaping_value;
 	float b_input_lw_nits;
+	float a_rho_hdr_value;
+	float a_inv_log_rho_hdr_value;
+	float a_rho_sdr_value;
+	float a_inv_rho_sdr_minus_one_value;
+	float b_inv_lw_nits_value;
+	float b_hlg_inv_gamma_value;
+	float b_hlg_exponent_value;
+	float b_hlg_ratio_value;
+	float b_strength_over_slope_value;
+	float b_slope_over_strength_value;
+	float c_white_x_value;
+	float c_white_y_value;
+	float c_white_z_value;
+	float c_peak_lightness_value;
+	float inv_hdr_peak_nits_value;
+	float inv_sdr_peak_nits_value;
 	float c_alpha_value;
 	float c_matrix_in_values[3][3];
 	float c_matrix_out_values[3][3];
@@ -120,6 +148,53 @@ static void matrix3_multiply(const double a[3][3], const double b[3][3], double 
 					a[row][2] * b[2][col];
 		}
 	}
+}
+
+static double lab_f_for_parameters(double value)
+{
+	const double delta = 6.0 / 29.0;
+	const double delta3 = delta * delta * delta;
+	return value > delta3 ? pow(value, 1.0 / 3.0) : value / (3.0 * delta * delta) + 4.0 / 29.0;
+}
+
+/* The BT.2446 equations in the effect are written in terms of the configured
+ * peaks, HLG input white, the knee shape and the Method C reference white.
+ * Those values are fixed for an entire draw, so evaluating their pow(), log()
+ * and division once per settings change avoids repeating them for every pixel.
+ * Each assignment below keeps the shader's original clamp and is explained in
+ * docs/hoisting-uniform-constants.md. */
+static void build_derived_parameters(struct bt2446_filter *filter)
+{
+	const double hdr_peak = fmax(filter->hdr_peak_nits, 0.0001f);
+	const double sdr_peak = fmax(filter->sdr_peak_nits, 0.0001f);
+	const double rho_hdr = 1.0 + 32.0 * pow(hdr_peak / 10000.0, 1.0 / 2.4);
+	const double rho_sdr = 1.0 + 32.0 * pow(sdr_peak / 10000.0, 1.0 / 2.4);
+	const double lw_in = fmax(filter->b_input_lw_nits, 1.0f);
+	const double hlg_gamma = 1.2 + 0.42 * (log(lw_in / 1000.0) * 0.4342944819);
+	const double strength = fmax(filter->b_strength_nits, 0.0001f);
+	const double slope = fmax(filter->b_slope_value, 0.0001f);
+	const double reference_white = fmax(filter->c_hdr_reference_white_nits, 0.0001f);
+
+	filter->a_rho_hdr_value = (float)rho_hdr;
+	filter->a_inv_log_rho_hdr_value = (float)(1.0 / log(rho_hdr));
+	filter->a_rho_sdr_value = (float)rho_sdr;
+	filter->a_inv_rho_sdr_minus_one_value = (float)(1.0 / (rho_sdr - 1.0));
+
+	filter->b_inv_lw_nits_value = (float)(1.0 / lw_in);
+	filter->b_hlg_inv_gamma_value = (float)(1.0 / hlg_gamma);
+	filter->b_hlg_exponent_value = (float)(1.03 - hlg_gamma);
+	filter->b_hlg_ratio_value = (float)(291.0 / lw_in);
+	filter->b_strength_over_slope_value = (float)(strength / slope);
+	filter->b_slope_over_strength_value = (float)(slope / strength);
+
+	filter->c_white_x_value = (float)(reference_white * 192.93 / 203.0);
+	filter->c_white_y_value = (float)reference_white;
+	filter->c_white_z_value = (float)(reference_white * 221.05 / 203.0);
+	filter->c_peak_lightness_value =
+		(float)fmax(116.0 * lab_f_for_parameters(hdr_peak / reference_white) - 16.0, 100.0001);
+
+	filter->inv_hdr_peak_nits_value = (float)(1.0 / hdr_peak);
+	filter->inv_sdr_peak_nits_value = (float)(1.0 / sdr_peak);
 }
 
 /* Method C runs Rec.709 -> Rec.2020 -> crosstalk -> XYZ, applies the tone curve,
@@ -204,13 +279,28 @@ static void *bt2446_filter_create(obs_data_t *settings, obs_source_t *context)
 	}
 
 	filter->method = gs_effect_get_param_by_name(filter->effect, "method");
-	filter->hdr_peak = gs_effect_get_param_by_name(filter->effect, "hdr_peak_nits");
 	filter->sdr_peak = gs_effect_get_param_by_name(filter->effect, "sdr_peak_nits");
 	filter->b_knee = gs_effect_get_param_by_name(filter->effect, "b_knee_nits");
-	filter->b_strength = gs_effect_get_param_by_name(filter->effect, "b_strength_nits");
-	filter->b_slope_param = gs_effect_get_param_by_name(filter->effect, "b_slope");
 	filter->b_hlg_shaping = gs_effect_get_param_by_name(filter->effect, "b_hlg_shaping");
-	filter->b_input_lw = gs_effect_get_param_by_name(filter->effect, "b_input_lw_nits");
+	filter->a_rho_hdr = gs_effect_get_param_by_name(filter->effect, "a_rho_hdr");
+	filter->a_inv_log_rho_hdr = gs_effect_get_param_by_name(filter->effect, "a_inv_log_rho_hdr");
+	filter->a_rho_sdr = gs_effect_get_param_by_name(filter->effect, "a_rho_sdr");
+	filter->a_inv_rho_sdr_minus_one =
+		gs_effect_get_param_by_name(filter->effect, "a_inv_rho_sdr_minus_one");
+	filter->b_inv_lw_nits = gs_effect_get_param_by_name(filter->effect, "b_inv_lw_nits");
+	filter->b_hlg_inv_gamma = gs_effect_get_param_by_name(filter->effect, "b_hlg_inv_gamma");
+	filter->b_hlg_exponent = gs_effect_get_param_by_name(filter->effect, "b_hlg_exponent");
+	filter->b_hlg_ratio = gs_effect_get_param_by_name(filter->effect, "b_hlg_ratio");
+	filter->b_strength_over_slope =
+		gs_effect_get_param_by_name(filter->effect, "b_strength_over_slope");
+	filter->b_slope_over_strength =
+		gs_effect_get_param_by_name(filter->effect, "b_slope_over_strength");
+	filter->c_white_x = gs_effect_get_param_by_name(filter->effect, "c_white_x_nits");
+	filter->c_white_y = gs_effect_get_param_by_name(filter->effect, "c_white_y_nits");
+	filter->c_white_z = gs_effect_get_param_by_name(filter->effect, "c_white_z_nits");
+	filter->c_peak_lightness = gs_effect_get_param_by_name(filter->effect, "c_peak_lightness");
+	filter->inv_hdr_peak = gs_effect_get_param_by_name(filter->effect, "inv_hdr_peak_nits");
+	filter->inv_sdr_peak = gs_effect_get_param_by_name(filter->effect, "inv_sdr_peak_nits");
 	filter->c_matrix_in[0] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_0");
 	filter->c_matrix_in[1] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_1");
 	filter->c_matrix_in[2] = gs_effect_get_param_by_name(filter->effect, "c_matrix_in_2");
@@ -263,6 +353,7 @@ static void bt2446_filter_update(void *data, obs_data_t *settings)
 	filter->c_k2_value = filter->c_k1_value * (1.0f - filter->c_k3_value) * filter->c_knee_hdr_nits;
 	filter->c_k4_value = filter->c_k1_value * filter->c_knee_hdr_nits -
 			     filter->c_k2_value * logf(1.0f - filter->c_k3_value);
+	build_derived_parameters(filter);
 	build_method_c_matrices(filter);
 }
 
@@ -411,13 +502,26 @@ static void bt2446_filter_render(void *data, gs_effect_t *effect)
 		return;
 
 	gs_effect_set_float(filter->method, (float)filter->selected_method);
-	gs_effect_set_float(filter->hdr_peak, filter->hdr_peak_nits);
 	gs_effect_set_float(filter->sdr_peak, filter->sdr_peak_nits);
 	gs_effect_set_float(filter->b_knee, filter->b_knee_nits);
-	gs_effect_set_float(filter->b_strength, filter->b_strength_nits);
-	gs_effect_set_float(filter->b_slope_param, filter->b_slope_value);
 	gs_effect_set_float(filter->b_hlg_shaping, filter->b_hlg_shaping_value);
-	gs_effect_set_float(filter->b_input_lw, filter->b_input_lw_nits);
+	gs_effect_set_float(filter->a_rho_hdr, filter->a_rho_hdr_value);
+	gs_effect_set_float(filter->a_inv_log_rho_hdr, filter->a_inv_log_rho_hdr_value);
+	gs_effect_set_float(filter->a_rho_sdr, filter->a_rho_sdr_value);
+	gs_effect_set_float(filter->a_inv_rho_sdr_minus_one,
+			    filter->a_inv_rho_sdr_minus_one_value);
+	gs_effect_set_float(filter->b_inv_lw_nits, filter->b_inv_lw_nits_value);
+	gs_effect_set_float(filter->b_hlg_inv_gamma, filter->b_hlg_inv_gamma_value);
+	gs_effect_set_float(filter->b_hlg_exponent, filter->b_hlg_exponent_value);
+	gs_effect_set_float(filter->b_hlg_ratio, filter->b_hlg_ratio_value);
+	gs_effect_set_float(filter->b_strength_over_slope, filter->b_strength_over_slope_value);
+	gs_effect_set_float(filter->b_slope_over_strength, filter->b_slope_over_strength_value);
+	gs_effect_set_float(filter->c_white_x, filter->c_white_x_value);
+	gs_effect_set_float(filter->c_white_y, filter->c_white_y_value);
+	gs_effect_set_float(filter->c_white_z, filter->c_white_z_value);
+	gs_effect_set_float(filter->c_peak_lightness, filter->c_peak_lightness_value);
+	gs_effect_set_float(filter->inv_hdr_peak, filter->inv_hdr_peak_nits_value);
+	gs_effect_set_float(filter->inv_sdr_peak, filter->inv_sdr_peak_nits_value);
 	for (size_t i = 0; i < 3; ++i) {
 		gs_effect_set_val(filter->c_matrix_in[i], filter->c_matrix_in_values[i], sizeof(float) * 3);
 		gs_effect_set_val(filter->c_matrix_out[i], filter->c_matrix_out_values[i], sizeof(float) * 3);
